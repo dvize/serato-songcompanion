@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Serato Companion</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ── Collapsed pill (visible when window is small) ── -->
+    <div id="pill">
+        <div class="pill-drag-area">
+            <span class="pill-icon">♫</span>
+            <div class="pill-track">
+                <span id="pillTitle">Serato Companion</span>
+                <span id="pillArtist"></span>
+            </div>
+        </div>
+        <div class="pill-meta">
+            <span class="pill-chip" id="pillBPM"></span>
+            <span class="pill-chip" id="pillKey"></span>
+        </div>
+    </div>
+
+    <!-- ── Expanded full app ── -->
+    <div class="app-container" id="appContainer">
+        <header class="glass-panel app-drag-area">
+            <div class="logo">
+                <span class="icon">🎵</span>
+                <h1>Serato Companion</h1>
+            </div>
+            <div class="header-right">
+                <div class="zoom-control" title="UI Scale">
+                    <span class="zoom-label">⊖</span>
+                    <input type="range" id="zoomSlider" class="zoom-slider" min="50" max="150" step="5" value="100">
+                    <span class="zoom-label">⊕</span>
+                    <span class="zoom-value" id="zoomValue">100%</span>
+                </div>
+                <div class="status-indicator" id="connectionStatus">
+                    <span class="dot"></span>
+                    <span class="text">Connected</span>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <!-- Current Track Section -->
+            <section class="current-track-section glass-panel">
+                <div class="section-header">
+                    <h2>Now Playing</h2>
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <button type="button" id="lockBtn" class="lock-btn" title="Lock track — ignore previews">&#128274; Lock</button>
+                        <div class="live-badge" id="liveBadge">LIVE</div>
+                    </div>
+                </div>
+                <div class="track-card active" id="currentTrackCard">
+                    <div class="track-info">
+                        <h3 id="currentTitle">Waiting for track...</h3>
+                        <p id="currentArtist">Start playing in Serato</p>
+                    </div>
+                    <div class="track-meta">
+                        <div class="meta-item">
+                            <span class="label">BPM</span>
+                            <span class="value" id="currentBPM">--</span>
+                        </div>
+                        <div class="meta-item">
+                            <span class="label">KEY</span>
+                            <span class="value" id="currentKey">--</span>
+                        </div>
+                        <div class="meta-item">
+                            <span class="label">ENERGY</span>
+                            <span class="value" id="currentEnergy">--</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Recommendations Section -->
+            <section class="recommendations-section" id="recommendationsSection">
+                <div class="section-header">
+                    <h2>Recommendations</h2>
+                    <button type="button" id="toggleFiltersBtn" class="toggle-filters-btn" title="Show/hide filters">Filters ▲</button>
+                </div>
+
+                <!-- Filters Panel -->
+                <div class="filters-panel glass-panel">
+                    <!-- Toggle row -->
+                    <div class="filter-row">
+                        <label class="toggle">
+                            <input type="checkbox" id="filterKey" checked>
+                            <span class="slider"></span>
+                            <span class="label-text">Harmonic Key</span>
+                        </label>
+                        <label class="toggle">
+                            <input type="checkbox" id="filterGenre">
+                            <span class="slider"></span>
+                            <span class="label-text">Same Genre</span>
+                        </label>
+                        <label class="toggle">
+                            <input type="checkbox" id="filterEnergyStep">
+                            <span class="slider"></span>
+                            <span class="label-text">Energy ±1</span>
+                        </label>
+                        <label class="toggle">
+                            <input type="checkbox" id="filterHidePlayed">
+                            <span class="slider"></span>
+                            <span class="label-text">Hide Played</span>
+                        </label>
+                    </div>
+
+                    <!-- BPM range row -->
+                    <div class="filter-row filter-row-inputs">
+                        <div class="filter-group">
+                            <label class="filter-label">BPM Min</label>
+                            <input type="number" id="filterBpmMin" class="filter-input" placeholder="e.g. 120" min="0" max="300">
+                        </div>
+                        <div class="filter-group">
+                            <label class="filter-label">BPM Max</label>
+                            <input type="number" id="filterBpmMax" class="filter-input" placeholder="e.g. 132" min="0" max="300">
+                        </div>
+                        <div class="filter-group">
+                            <label class="filter-label">Max Results</label>
+                            <select id="filterMaxResults" class="filter-select">
+                                <option value="10">10</option>
+                                <option value="25">25</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                                <option value="0">All</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Year added row -->
+                    <div class="filter-row filter-row-inputs">
+                        <div class="filter-group">
+                            <label class="filter-label">From Year</label>
+                            <input type="number" id="filterYearMin" class="filter-input" placeholder="e.g. 2024" min="1900" max="2099">
+                        </div>
+                        <div class="filter-group">
+                            <label class="filter-label">To Year</label>
+                            <input type="number" id="filterYearMax" class="filter-input" placeholder="e.g. 2026" min="1900" max="2099">
+                        </div>
+                        <div class="filter-group year-source-group">
+                            <label class="filter-label">Year Type</label>
+                            <div class="year-source-toggle">
+                                <button type="button" class="year-source-btn active" data-source="added">Date Added</button>
+                                <button type="button" class="year-source-btn" data-source="year">Song Year</button>
+                            </div>
+                        </div>
+                        <div class="filter-group" style="justify-content:flex-end;align-items:flex-end;">
+                            <button type="button" id="filterYearAll" class="year-all-btn">All Years</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="recommendations-list" id="recommendationsList">
+                    <div class="empty-state">
+                        <p>Play a track to see recommendations</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

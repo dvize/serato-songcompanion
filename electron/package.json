@@ -1,0 +1,59 @@
+{
+  "name": "serato-companion",
+  "version": "1.0.0",
+  "description": "Serato DJ Companion",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.seratocompanion.app",
+    "productName": "Serato Companion",
+    "directories": {
+      "output": "../dist"
+    },
+    "win": {
+      "target": "portable"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.music"
+    },
+    "extraResources": [
+      {
+        "from": "../companion.exe",
+        "to": "companion.exe"
+      },
+      {
+        "from": "../companion-mac-amd64",
+        "to": "companion-mac-amd64"
+      },
+      {
+        "from": "../companion-mac-arm64",
+        "to": "companion-mac-arm64"
+      },
+      {
+        "from": "../web",
+        "to": "web"
+      },
+      {
+        "from": "../config.json",
+        "to": "config.json"
+      }
+    ]
+  }
+}
