@@ -1,0 +1,52 @@
+name: Build Mac DMG
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to upload DMG to (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Go Mac binaries
+        run: |
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o companion-mac-amd64 ./cmd/companion
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o companion-mac-arm64 ./cmd/companion
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Electron dependencies
+        run: npm install
+        working-directory: electron
+
+      - name: Build Mac DMG
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run build:mac
+        working-directory: electron
+
+      - name: Upload DMGs to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -19,7 +19,13 @@
       "output": "../dist"
     },
     "win": {
-      "target": "portable"
+      "target": "portable",
+      "extraResources": [
+        {
+          "from": "../companion.exe",
+          "to": "companion.exe"
+        }
+      ]
     },
     "mac": {
       "target": [
@@ -31,21 +37,19 @@
           ]
         }
       ],
-      "category": "public.app-category.music"
+      "category": "public.app-category.music",
+      "extraResources": [
+        {
+          "from": "../companion-mac-amd64",
+          "to": "companion-mac-amd64"
+        },
+        {
+          "from": "../companion-mac-arm64",
+          "to": "companion-mac-arm64"
+        }
+      ]
     },
     "extraResources": [
-      {
-        "from": "../companion.exe",
-        "to": "companion.exe"
-      },
-      {
-        "from": "../companion-mac-amd64",
-        "to": "companion-mac-amd64"
-      },
-      {
-        "from": "../companion-mac-arm64",
-        "to": "companion-mac-arm64"
-      },
       {
         "from": "../web",
         "to": "web"
