@@ -1,6 +1,6 @@
 {
   "name": "serato-companion",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Serato DJ Companion",
   "main": "main.js",
   "scripts": {
