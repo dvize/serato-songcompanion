@@ -5,11 +5,13 @@ const state = {
     socket: null,
     locked: false,
     lastRecs: [],
+    settings: null, // server settings (defaults)
     sort: { field: 'score', dir: 'desc' },
     filters: {
         key: true,
         genre: false,
-        energyStep: false,
+        energyMode: 'within', // any|exact|within|higher|lower
+        energyRange: 1,
         hidePlayed: false,
         bpmMin: '',
         bpmMax: '',
@@ -33,7 +35,9 @@ const els = {
     recommendationsList: document.getElementById('recommendationsList'),
     filterKey: document.getElementById('filterKey'),
     filterGenre: document.getElementById('filterGenre'),
-    filterEnergyStep: document.getElementById('filterEnergyStep'),
+    filterEnergyMode: document.getElementById('filterEnergyMode'),
+    filterEnergyRange: document.getElementById('filterEnergyRange'),
+    energyRangeGroup: document.getElementById('energyRangeGroup'),
     filterHidePlayed: document.getElementById('filterHidePlayed'),
     filterBpmMin: document.getElementById('filterBpmMin'),
     filterBpmMax: document.getElementById('filterBpmMax'),
@@ -51,7 +55,12 @@ const els = {
     pillKey: document.getElementById('pillKey'),
     appContainer: document.getElementById('appContainer'),
     recommendationsSection: document.getElementById('recommendationsSection'),
-    toggleFiltersBtn: document.getElementById('toggleFiltersBtn')
+    toggleFiltersBtn: document.getElementById('toggleFiltersBtn'),
+    settingsBtn: document.getElementById('settingsBtn'),
+    settingsOverlay: document.getElementById('settingsOverlay'),
+    settingsCloseBtn: document.getElementById('settingsCloseBtn'),
+    settingsSaved: document.getElementById('settingsSaved'),
+    sessionStats: document.getElementById('sessionStats')
 };
 
 // ── Electron + expand/collapse state ──────────────────────────────────────
@@ -64,6 +73,7 @@ function expand() {
     expanded = true;
     clearTimeout(collapseTimer);
     document.body.classList.add('expanded');
+    document.body.classList.remove('idle');
     if (isElectron) window.electronAPI.expandWindow();
 }
 
@@ -75,20 +85,47 @@ function collapse() {
     if (isElectron) window.electronAPI.collapseWindow();
 }
 
+function toggleExpand() {
+    if (expanded) collapse();
+    else expand();
+}
+
 function scheduleCollapse() {
     clearTimeout(collapseTimer);
     collapseTimer = setTimeout(collapse, 1500);
 }
 
 // mousemove fires whenever the cursor is inside the window — use it to
-// expand on first entry and cancel any pending collapse timer.
+// expand on first entry, cancel any pending collapse timer, and reset idle dim.
 document.addEventListener('mousemove', () => {
+    document.body.classList.remove('idle');
+    resetIdleDim();
     if (!expanded) expand();
     else clearTimeout(collapseTimer);
 });
 
 // Only collapse once the mouse has genuinely left the window.
 document.addEventListener('mouseleave', scheduleCollapse);
+
+// ── Idle dim (collapsed only) ─────────────────────────────────────────────
+let idleDimTimer = null;
+
+function resetIdleDim() {
+    clearTimeout(idleDimTimer);
+    const s = state.settings;
+    if (!s || !s.dim_enabled) return;
+    idleDimTimer = setTimeout(() => {
+        if (!expanded) document.body.classList.add('idle');
+    }, (s.dim_delay_sec || 8) * 1000);
+}
+
+// ── Double-click pill toggles expand/collapse ─────────────────────────────
+els.pill.addEventListener('dblclick', toggleExpand);
+
+// Global hotkey from Electron main (via settings)
+if (isElectron && window.electronAPI.onToggleExpand) {
+    window.electronAPI.onToggleExpand(toggleExpand);
+}
 
 // ── Pill drag ──────────────────────────────────────────────────────────────
 // -webkit-app-region: drag is unreliable on transparent frameless windows,
@@ -144,8 +181,90 @@ function init() {
     els.filterYearMin.value = state.filters.yearMin;
     els.filterYearMax.value = state.filters.yearMax;
 
+    loadSettings();
     connectWebSocket();
     setupEventListeners();
+    setupSettingsPanel();
+    setupShortcuts();
+    refreshSessionStats();
+    resetIdleDim();
+    setInterval(refreshSessionStats, 60000);
+}
+
+async function loadSettings() {
+    try {
+        const res = await fetch('/api/settings');
+        state.settings = await res.json();
+        applySettingsToUI();
+    } catch (err) {
+        console.error('Failed to load settings:', err);
+    }
+}
+
+// Push settings defaults into the filter panel (settings panel populated separately)
+function applySettingsToUI() {
+    const s = state.settings;
+    if (!s) return;
+
+    state.filters.energyMode = s.energy_mode || 'within';
+    state.filters.energyRange = s.energy_range || 1;
+    state.filters.hidePlayed = !!s.hide_played;
+    if (s.max_results > 0 || s.max_results === 0) {
+        state.filters.maxResults = s.max_results || 50;
+    }
+
+    els.filterEnergyMode.value = state.filters.energyMode;
+    els.filterEnergyRange.value = String(state.filters.energyRange);
+    els.energyRangeGroup.style.display = state.filters.energyMode === 'within' ? '' : 'none';
+    els.filterHidePlayed.checked = state.filters.hidePlayed;
+    els.filterMaxResults.value = String(state.filters.maxResults);
+}
+
+// ── Session stats ─────────────────────────────────────────────────────────
+async function refreshSessionStats() {
+    if (!state.settings || state.settings.session_stats === false) {
+        els.sessionStats.style.display = 'none';
+        return;
+    }
+    try {
+        const res = await fetch('/api/session-stats');
+        const st = await res.json();
+        if (!st || (!st.count && !(st.top_genres || []).length)) {
+            els.sessionStats.style.display = 'none';
+            return;
+        }
+        els.sessionStats.style.display = '';
+        const genres = (st.top_genres || []).slice(0, 3).join(' · ');
+        els.sessionStats.textContent = `${st.count} played${genres ? ' — ' + genres : ''}`;
+    } catch (err) {
+        els.sessionStats.style.display = 'none';
+    }
+}
+
+// ── Keyboard shortcuts (ignored while typing in inputs) ───────────────────
+function setupShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        const tag = (e.target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'select' || tag === 'textarea' || e.metaKey || e.ctrlKey || e.altKey) return;
+        if (!expanded) return;
+        switch (e.key.toLowerCase()) {
+            case 'r':
+                fetchRecommendations();
+                break;
+            case 'c': {
+                const top = sortRecs([...state.lastRecs])[0];
+                if (top) {
+                    const a = top.Track.Artist || '';
+                    const t = top.Track.Title || '';
+                    copyToClipboard(els.recommendationsList.querySelector('.rec-item'), `${a} ${t}`.trim());
+                }
+                break;
+            }
+            case 'f':
+                els.toggleFiltersBtn.click();
+                break;
+        }
+    });
 }
 
 function connectWebSocket() {
@@ -198,6 +317,8 @@ function updateCurrentTrack(track) {
 
     updatePill(track);
 
+    refreshSessionStats();
+
     // Animate
     const card = document.getElementById('currentTrackCard');
     card.classList.remove('active');
@@ -215,7 +336,8 @@ async function fetchRecommendations() {
         energy: state.currentTrack.Energy || 0,
         match_key: state.filters.key ? '1' : '0',
         match_genre: state.filters.genre ? '1' : '0',
-        energy_step: state.filters.energyStep ? '1' : '0',
+        energy_mode: state.filters.energyMode,
+        energy_range: state.filters.energyRange,
         hide_played: state.filters.hidePlayed ? '1' : '0',
         max_results: state.filters.maxResults
     });
@@ -414,8 +536,14 @@ function setupEventListeners() {
         fetchRecommendations();
     });
 
-    els.filterEnergyStep.addEventListener('change', (e) => {
-        state.filters.energyStep = e.target.checked;
+    els.filterEnergyMode.addEventListener('change', (e) => {
+        state.filters.energyMode = e.target.value;
+        els.energyRangeGroup.style.display = state.filters.energyMode === 'within' ? '' : 'none';
+        fetchRecommendations();
+    });
+
+    els.filterEnergyRange.addEventListener('change', (e) => {
+        state.filters.energyRange = parseInt(e.target.value, 10) || 1;
         fetchRecommendations();
     });
 
@@ -518,6 +646,214 @@ function setupEventListeners() {
             els.liveBadge.classList.add('locked');
         }
     });
+}
+
+// ── Settings panel ────────────────────────────────────────────────────────
+let settingsSaveTimer = null;
+
+function setupSettingsPanel() {
+    const setEls = {
+        energyMode: document.getElementById('setEnergyMode'),
+        energyRange: document.getElementById('setEnergyRange'),
+        genreMode: document.getElementById('setGenreMode'),
+        genreCount: document.getElementById('setGenreCount'),
+        bpmPercent: document.getElementById('setBpmPercent'),
+        bpmHalfDouble: document.getElementById('setBpmHalfDouble'),
+        maxResults: document.getElementById('setMaxResults'),
+        hidePlayed: document.getElementById('setHidePlayed'),
+        cooldownMin: document.getElementById('setCooldownMin'),
+        collapsedW: document.getElementById('setCollapsedW'),
+        collapsedH: document.getElementById('setCollapsedH'),
+        expandedW: document.getElementById('setExpandedW'),
+        expandedH: document.getElementById('setExpandedH'),
+        dimEnabled: document.getElementById('setDimEnabled'),
+        dimDelay: document.getElementById('setDimDelay'),
+        dimOpacity: document.getElementById('setDimOpacity'),
+        hotkey: document.getElementById('setHotkey'),
+        trayMode: document.getElementById('setTrayMode'),
+        sessionStats: document.getElementById('setSessionStats')
+    };
+
+    const tierBoxes = document.querySelectorAll('#setKeyTiers input[data-tier]');
+
+    function fillPanel() {
+        const s = state.settings;
+        if (!s) return;
+        setEls.energyMode.value = s.energy_mode || 'within';
+        setEls.energyRange.value = String(s.energy_range || 1);
+        setEls.energyRange.style.display = (s.energy_mode === 'within') ? '' : 'none';
+        setEls.genreMode.value = s.genre_mode || 'any';
+        setEls.genreCount.value = String(s.genre_count || 0);
+        setEls.bpmPercent.value = s.bpm_percent || 8;
+        setEls.bpmHalfDouble.checked = !!s.bpm_half_double;
+        setEls.maxResults.value = String(s.max_results || 50);
+        setEls.hidePlayed.checked = !!s.hide_played;
+        setEls.cooldownMin.value = String(s.cooldown_min || 0);
+        setEls.collapsedW.value = s.collapsed_width || 340;
+        setEls.collapsedH.value = s.collapsed_height || 64;
+        setEls.expandedW.value = s.expanded_width || 860;
+        setEls.expandedH.value = s.expanded_height || 720;
+        setEls.dimEnabled.checked = !!s.dim_enabled;
+        setEls.dimDelay.value = s.dim_delay_sec || 8;
+        setEls.dimOpacity.value = s.dim_opacity || 50;
+        setEls.hotkey.value = s.hotkey || '';
+        setEls.trayMode.checked = !!s.tray_mode;
+        setEls.sessionStats.checked = s.session_stats !== false;
+        tierBoxes.forEach(box => {
+            const tier = box.dataset.tier;
+            box.checked = !s.key_tiers || s.key_tiers[tier] !== false;
+        });
+    }
+
+    function collectSettings() {
+        const s = { ...(state.settings || {}) };
+        s.energy_mode = setEls.energyMode.value;
+        s.energy_range = parseInt(setEls.energyRange.value, 10) || 1;
+        s.genre_mode = setEls.genreMode.value;
+        s.genre_count = parseInt(setEls.genreCount.value, 10) || 0;
+        s.bpm_percent = parseFloat(setEls.bpmPercent.value) || 8;
+        s.bpm_half_double = setEls.bpmHalfDouble.checked;
+        s.max_results = parseInt(setEls.maxResults.value, 10) || 0;
+        s.hide_played = setEls.hidePlayed.checked;
+        s.cooldown_min = parseInt(setEls.cooldownMin.value, 10) || 0;
+        s.collapsed_width = parseInt(setEls.collapsedW.value, 10) || 340;
+        s.collapsed_height = parseInt(setEls.collapsedH.value, 10) || 64;
+        s.expanded_width = parseInt(setEls.expandedW.value, 10) || 860;
+        s.expanded_height = parseInt(setEls.expandedH.value, 10) || 720;
+        s.dim_enabled = setEls.dimEnabled.checked;
+        s.dim_delay_sec = parseInt(setEls.dimDelay.value, 10) || 8;
+        s.dim_opacity = parseInt(setEls.dimOpacity.value, 10) || 50;
+        s.hotkey = setEls.hotkey.value.trim();
+        s.tray_mode = setEls.trayMode.checked;
+        s.session_stats = setEls.sessionStats.checked;
+        const tiers = {};
+        tierBoxes.forEach(box => { tiers[box.dataset.tier] = box.checked; });
+        s.key_tiers = tiers;
+        return s;
+    }
+
+    function flashSaved() {
+        els.settingsSaved.textContent = 'Saved ✓';
+        setTimeout(() => { els.settingsSaved.textContent = ''; }, 1500);
+    }
+
+    function scheduleSave() {
+        clearTimeout(settingsSaveTimer);
+        settingsSaveTimer = setTimeout(async () => {
+            const payload = collectSettings();
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                state.settings = await res.json();
+                fillPanel();
+                applySettingsToUI();
+                resetIdleDim();
+                fetchRecommendations();
+                refreshSessionStats();
+                flashSaved();
+                // Notify Electron about hotkey/window-size changes
+                if (isElectron && window.electronAPI.settingsChanged) {
+                    const res = await window.electronAPI.settingsChanged(state.settings);
+                    if (res && res.hotkeyOk === false && state.settings.hotkey) {
+                        els.settingsSaved.textContent = 'Hotkey registration failed — try another combo';
+                        els.settingsSaved.style.color = '#f87171';
+                        setTimeout(() => {
+                            els.settingsSaved.textContent = '';
+                            els.settingsSaved.style.color = '';
+                        }, 3000);
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to save settings:', err);
+                els.settingsSaved.textContent = 'Save failed';
+            }
+        }, 600);
+    }
+
+    els.settingsBtn.addEventListener('click', () => {
+        fillPanel();
+        els.settingsOverlay.classList.add('open');
+    });
+    els.settingsCloseBtn.addEventListener('click', () => {
+        els.settingsOverlay.classList.remove('open');
+    });
+    els.settingsOverlay.addEventListener('click', (e) => {
+        if (e.target === els.settingsOverlay) els.settingsOverlay.classList.remove('open');
+    });
+
+    setEls.energyMode.addEventListener('change', () => {
+        setEls.energyRange.style.display = setEls.energyMode.value === 'within' ? '' : 'none';
+        scheduleSave();
+    });
+
+    // Hotkey capture: focus the field, press any combo, it records the
+    // accelerator. Escape/Backspace clears. Manual typing still works too.
+    setEls.hotkey.addEventListener('keydown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (e.key === 'Escape' || e.key === 'Backspace') {
+            setEls.hotkey.value = '';
+            scheduleSave();
+            return;
+        }
+        if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Enter', 'Dead'].includes(e.key)) {
+            return; // modifier alone — wait for the full combo
+        }
+
+        const key = hotkeyKeyName(e);
+        if (!key) return;
+
+        const isMac = navigator.platform.toUpperCase().includes('MAC');
+        const parts = [];
+        if (e.ctrlKey) parts.push(isMac ? 'Control' : 'CommandOrControl');
+        if (e.metaKey) parts.push('Command');
+        if (e.altKey) parts.push('Alt');
+        if (e.shiftKey) parts.push('Shift');
+
+        // Require a modifier (or an F-key) so we never hijack plain typing
+        if (parts.length === 0 && !/^F([1-9]|1[0-2])$/.test(key)) {
+            els.settingsSaved.textContent = 'Add a modifier (Cmd/Ctrl/Alt)';
+            els.settingsSaved.style.color = '#fbbf24';
+            setTimeout(() => {
+                els.settingsSaved.textContent = '';
+                els.settingsSaved.style.color = '';
+            }, 2500);
+            return;
+        }
+
+        parts.push(key);
+        setEls.hotkey.value = parts.join('+');
+        scheduleSave();
+    });
+
+    Object.values(setEls).forEach(el => {
+        if (el === setEls.energyMode) return;
+        el.addEventListener('change', scheduleSave);
+        if (el.type === 'text' || el.type === 'number') {
+            el.addEventListener('input', scheduleSave);
+        }
+    });
+    tierBoxes.forEach(box => box.addEventListener('change', scheduleSave));
+}
+
+// Map a KeyboardEvent to an Electron accelerator key name, or null if unusable.
+function hotkeyKeyName(e) {
+    const k = e.key;
+    if (/^[a-zA-Z]$/.test(k)) return k.toUpperCase();
+    if (/^[0-9]$/.test(k)) return k;
+    if (k === ' ') return 'Space';
+    const named = {
+        ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right'
+    };
+    if (named[k]) return named[k];
+    if (/^F([1-9]|1[0-2])$/.test(k)) return k;
+    if (k === '+') return 'Plus';
+    if (k.length === 1) return k.toUpperCase() === k.toLowerCase() ? k : k.toUpperCase(); // , . / ; ' [ ] etc
+    return null;
 }
 
 // Start

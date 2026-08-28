@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,7 +25,10 @@ type SessionWatcher struct {
 	db              *sql.DB
 	lastTrackID     int64
 	lastSessionID   int64
-	PlayedFilePaths map[string]bool // set of file paths played this session
+	PlayedFilePaths map[string]bool      // set of file paths played this session
+	PlayedAt        map[string]time.Time // file path → last-played time this session
+	PlayedCount     int                  // unique tracks played this session
+	PlayedGenres    map[string]int       // genre token → play count this session
 }
 
 // NewSessionWatcher creates a new watcher. dbPath may be empty for auto-detection.
@@ -36,7 +41,42 @@ func NewSessionWatcher(dbPath string) *SessionWatcher {
 		UpdateChan:      make(chan *sc.SessionEntry, 4),
 		stopChan:        make(chan struct{}),
 		PlayedFilePaths: make(map[string]bool),
+		PlayedAt:        make(map[string]time.Time),
+		PlayedGenres:    make(map[string]int),
 	}
+}
+
+// SessionStats summarizes what has been played in the current session.
+type SessionStats struct {
+	Count     int      `json:"count"`
+	TopGenres []string `json:"top_genres"`
+}
+
+// Stats returns current session statistics.
+func (w *SessionWatcher) Stats() SessionStats {
+	type gv struct {
+		name  string
+		count int
+	}
+	var gvs []gv
+	for g, c := range w.PlayedGenres {
+		gvs = append(gvs, gv{g, c})
+	}
+	sort.Slice(gvs, func(i, j int) bool {
+		if gvs[i].count != gvs[j].count {
+			return gvs[i].count > gvs[j].count
+		}
+		return gvs[i].name < gvs[j].name
+	})
+	n := 3
+	if len(gvs) < n {
+		n = len(gvs)
+	}
+	top := make([]string, n)
+	for i := 0; i < n; i++ {
+		top[i] = gvs[i].name
+	}
+	return SessionStats{Count: w.PlayedCount, TopGenres: top}
 }
 
 // defaultMasterSQLitePath returns the platform-appropriate path to master.sqlite.
@@ -208,7 +248,17 @@ func (w *SessionWatcher) check() {
 			r.deck, r.id, r.artist, r.title, r.bpm, r.key)
 
 		if r.fpath != "" {
+			if !w.PlayedFilePaths[r.fpath] {
+				w.PlayedCount++
+			}
 			w.PlayedFilePaths[r.fpath] = true
+			w.PlayedAt[r.fpath] = time.Now()
+			for _, g := range strings.Split(r.genre, ",") {
+				g = strings.ToLower(strings.TrimSpace(g))
+				if g != "" {
+					w.PlayedGenres[g]++
+				}
+			}
 		}
 
 		select {

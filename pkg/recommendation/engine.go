@@ -1,11 +1,13 @@
 package recommendation
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"serato-songcompanion/pkg/database"
 )
@@ -36,8 +38,37 @@ type Criteria struct {
 	MatchKey   bool
 	MatchGenre bool
 
-	// EnergyStep: if true, only include tracks within ±1 of SourceEnergy
-	EnergyStep bool
+	// EnergyMode controls how candidate energy is compared to SourceEnergy:
+	//   "any"    — no energy filter
+	//   "exact"  — only tracks at SourceEnergy
+	//   "within" — only tracks within ±EnergyRange of SourceEnergy
+	//   "higher" — only tracks at or above SourceEnergy
+	//   "lower"  — only tracks at or below SourceEnergy
+	// Legacy: EnergyStep=true maps to "within" with range 1.
+	EnergyMode  string
+	EnergyRange int
+	EnergyStep  bool // deprecated, kept for API compat
+
+	// GenreCount: when > 0, only the first N genres of the source genre string
+	// are considered (comma-separated lists on both sides).
+	GenreCount int
+	// GenreMode: "any" (default) = at least one genre must match (scored);
+	// "all" = every considered source genre must match (hard filter).
+	GenreMode string
+
+	// BPMHalfDouble: allow half/double-time BPM matches (default via server settings).
+	BPMHalfDouble bool
+
+	// KeyTiers: enable/disable Camelot compatibility tiers
+	// (same/relative/adjacent/energy_boost/dominant). nil = all enabled.
+	KeyTiers map[string]bool
+	// KeyWeights: score contribution per tier. nil = built-in defaults.
+	KeyWeights map[string]float64
+
+	// CooldownPaths: file path → last-played time. Cooldown > 0 hides tracks
+	// played within that duration (stronger than ExcludeFilePaths).
+	CooldownPaths map[string]time.Time
+	Cooldown      time.Duration
 
 	// YearMin / YearMax: filter by year (0 = no limit / "All years").
 	// YearSource controls which year to compare:
@@ -74,14 +105,48 @@ func (e *Engine) GetRecommendations(c Criteria) []Recommendation {
 			continue
 		}
 
-		// Energy step filter: skip tracks more than 1 energy level away
-		if c.EnergyStep && c.SourceEnergy > 0 && t.Energy > 0 {
+		// Cooldown: hide tracks played within the cooldown window
+		if c.Cooldown > 0 && c.CooldownPaths != nil {
+			if ts, ok := c.CooldownPaths[t.FilePath]; ok && time.Since(ts) < c.Cooldown {
+				continue
+			}
+		}
+
+		// Energy filter
+		if c.SourceEnergy > 0 && t.Energy > 0 {
+			mode := c.EnergyMode
+			if mode == "" {
+				if c.EnergyStep {
+					mode = "within"
+				} else {
+					mode = "any"
+				}
+			}
 			diff := t.Energy - c.SourceEnergy
 			if diff < 0 {
 				diff = -diff
 			}
-			if diff > 1 {
-				continue
+			switch mode {
+			case "exact":
+				if t.Energy != c.SourceEnergy {
+					continue
+				}
+			case "within":
+				r := c.EnergyRange
+				if r <= 0 {
+					r = 1
+				}
+				if diff > r {
+					continue
+				}
+			case "higher":
+				if t.Energy < c.SourceEnergy {
+					continue
+				}
+			case "lower":
+				if t.Energy > c.SourceEnergy {
+					continue
+				}
 			}
 		}
 
@@ -141,7 +206,7 @@ func (e *Engine) GetRecommendations(c Criteria) []Recommendation {
 					score += 10
 					reasons = append(reasons, "BPM Match")
 					inRange = true
-				} else {
+				} else if c.BPMHalfDouble {
 					// Half/double BPM
 					halfBPM := c.SourceBPM / 2
 					doubleBPM := c.SourceBPM * 2
@@ -162,33 +227,36 @@ func (e *Engine) GetRecommendations(c Criteria) []Recommendation {
 		// --- Key Check ---
 		if c.MatchKey && c.SourceKey != "" && t.Key != "" {
 			compat, relation := camelotCompatibility(c.SourceKey, t.Key)
-			if compat {
-				switch relation {
-				case "same":
-					score += 10
-					reasons = append(reasons, "Same Key")
-				case "relative":
-					score += 9
-					reasons = append(reasons, "Relative (A↔B)")
-				case "adjacent":
-					score += 7
-					reasons = append(reasons, "Adjacent Key")
-				case "energy_boost":
-					score += 6
-					reasons = append(reasons, "Energy Boost (+7)")
-				case "dominant":
-					score += 5
-					reasons = append(reasons, "Dominant (+3)")
-				}
+			if compat && tierEnabled(c.KeyTiers, relation) {
+				w := tierWeight(c.KeyWeights, relation)
+				score += w
+				reasons = append(reasons, tierLabel(relation))
 			}
 		}
 
 		// --- Genre Check ---
 		if c.MatchGenre && c.SourceGenre != "" && t.Genre != "" {
-			if strings.Contains(strings.ToLower(t.Genre), strings.ToLower(c.SourceGenre)) ||
-				strings.Contains(strings.ToLower(c.SourceGenre), strings.ToLower(t.Genre)) {
-				score += 5
-				reasons = append(reasons, "Genre Match")
+			src := splitGenres(c.SourceGenre)
+			if c.GenreCount > 0 && c.GenreCount < len(src) {
+				src = src[:c.GenreCount]
+			}
+			tg := splitGenres(t.Genre)
+			matches := 0
+			for _, s := range src {
+				for _, g := range tg {
+					if strings.Contains(g, s) || strings.Contains(s, g) {
+						matches++
+						break
+					}
+				}
+			}
+			if matches > 0 && (c.GenreMode != "all" || matches >= len(src)) {
+				score += 5 * float64(matches)
+				label := "Genre Match"
+				if matches > 1 {
+					label = fmt.Sprintf("Genre Match ×%d", matches)
+				}
+				reasons = append(reasons, label)
 			}
 		}
 
@@ -291,6 +359,60 @@ func wheelDiff(a, b int) int {
 		d = 12 - d
 	}
 	return d
+}
+
+// tierEnabled reports whether a Camelot compatibility tier is enabled.
+// Unknown/nil maps default to enabled.
+func tierEnabled(tiers map[string]bool, relation string) bool {
+	if tiers == nil {
+		return true
+	}
+	v, ok := tiers[relation]
+	return !ok || v
+}
+
+var defaultTierWeights = map[string]float64{
+	"same":         10,
+	"relative":     9,
+	"adjacent":     7,
+	"energy_boost": 6,
+	"dominant":     5,
+}
+
+// tierWeight returns the score weight for a tier, defaulting to built-ins.
+func tierWeight(weights map[string]float64, relation string) float64 {
+	if w, ok := weights[relation]; ok {
+		return w
+	}
+	return defaultTierWeights[relation]
+}
+
+var tierLabels = map[string]string{
+	"same":         "Same Key",
+	"relative":     "Relative (A↔B)",
+	"adjacent":     "Adjacent Key",
+	"energy_boost": "Energy Boost (+7)",
+	"dominant":     "Dominant (+3)",
+}
+
+func tierLabel(relation string) string {
+	if l, ok := tierLabels[relation]; ok {
+		return l
+	}
+	return relation
+}
+
+// splitGenres splits a comma-separated genre string into lowercased tokens.
+func splitGenres(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 type camelotKey struct {

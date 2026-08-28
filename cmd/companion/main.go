@@ -38,6 +38,13 @@ func loadConfig() Config {
 	} else {
 		log.Println("No config.json found, using defaults")
 	}
+	// Empty strings in config.json must not clobber defaults
+	if config.DatabasePath == "" {
+		config.DatabasePath = filepath.Join(root, "database V2")
+	}
+	if config.HistoryPath == "" {
+		config.HistoryPath = filepath.Join(root, "history.database")
+	}
 	return config
 }
 

@@ -11,11 +11,13 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
 	"serato-songcompanion/pkg/database"
 	"serato-songcompanion/pkg/recommendation"
+	"serato-songcompanion/pkg/settings"
 	sc "serato-songcompanion/seratosync"
 )
 
@@ -25,8 +27,10 @@ type Server struct {
 	Engine       *recommendation.Engine
 	Watcher      *database.SessionWatcher
 	CurrentTrack *sc.SessionEntry
-	trackIndex     map[string]*database.Track // full file path → library track
-	trackByName    map[string]*database.Track // bare filename → library track (fallback)
+	Settings     *settings.Settings
+	settingsMu   sync.RWMutex
+	trackIndex   map[string]*database.Track // full file path → library track
+	trackByName  map[string]*database.Track // bare filename → library track (fallback)
 	clients      map[*websocket.Conn]bool
 	clientsMu    sync.Mutex
 	upgrader     websocket.Upgrader
@@ -35,6 +39,13 @@ type Server struct {
 // NewServer creates a new server
 func NewServer(db *database.Database, watcher *database.SessionWatcher) *Server {
 	engine := recommendation.NewEngine(db)
+
+	st, loaded := settings.Load()
+	if loaded {
+		log.Printf("Settings loaded from %s", settings.Path())
+	} else {
+		log.Printf("Settings: using defaults (%s will be created on first save)", settings.Path())
+	}
 
 	// Build O(1) lookup indexes
 	byPath := make(map[string]*database.Track, len(db.Tracks))
@@ -49,6 +60,7 @@ func NewServer(db *database.Database, watcher *database.SessionWatcher) *Server 
 		DB:          db,
 		Engine:      engine,
 		Watcher:     watcher,
+		Settings:    st,
 		trackIndex:  byPath,
 		trackByName: byName,
 		clients:     make(map[*websocket.Conn]bool),
@@ -65,6 +77,8 @@ func (s *Server) Start(port int) {
 	http.HandleFunc("/api/current-track", s.handleCurrentTrack)
 	http.HandleFunc("/api/recommendations", s.handleRecommendations)
 	http.HandleFunc("/api/reveal", s.handleReveal)
+	http.HandleFunc("/api/settings", s.handleSettings)
+	http.HandleFunc("/api/session-stats", s.handleSessionStats)
 	http.HandleFunc("/ws", s.handleWebSocket)
 
 	// Serve static files (frontend)
@@ -157,16 +171,37 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) {
 		energy = s.CurrentTrack.Energy
 	}
 
-	// Filter toggles
+	s.settingsMu.RLock()
+	st := s.Settings
+	s.settingsMu.RUnlock()
+
+	// Filter toggles — query param wins, else settings default
 	matchKey := parseBool(q.Get("match_key"), true)
 	matchGenre := parseBool(q.Get("match_genre"), false)
-	energyStep := parseBool(q.Get("energy_step"), false)
-	hidePlayed := parseBool(q.Get("hide_played"), false)
+	hidePlayed := parseBool(q.Get("hide_played"), st.HidePlayed)
+
+	// Energy mode: legacy energy_step=1 maps to within/±1; else param; else settings
+	energyMode := st.EnergyMode
+	energyRange := st.EnergyRange
+	if q.Get("energy_mode") != "" {
+		energyMode = q.Get("energy_mode")
+		if s := q.Get("energy_range"); s != "" {
+			if v, err := strconv.Atoi(s); err == nil && v > 0 {
+				energyRange = v
+			}
+		}
+	} else if q.Has("energy_step") {
+		if parseBool(q.Get("energy_step"), false) {
+			energyMode, energyRange = "within", 1
+		} else {
+			energyMode = "any"
+		}
+	}
 
 	// BPM range: prefer absolute min/max, fallback to percentage
 	bpmMin, _ := strconv.ParseFloat(q.Get("bpm_min"), 64)
 	bpmMax, _ := strconv.ParseFloat(q.Get("bpm_max"), 64)
-	bpmPct := 0.08 // default 8%
+	bpmPct := st.BPMPercent / 100.0
 	if s := q.Get("bpm_pct"); s != "" {
 		if v, err := strconv.ParseFloat(s, 64); err == nil {
 			bpmPct = v / 100.0 // frontend sends as integer percent e.g. "8"
@@ -174,9 +209,12 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Max results
-	maxResults := 50 // sensible default
+	maxResults := st.MaxResults
+	if maxResults == 0 {
+		maxResults = 50
+	}
 	if s := q.Get("max_results"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
 			maxResults = v
 		}
 	}
@@ -192,6 +230,20 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) {
 		excludePaths = s.Watcher.PlayedFilePaths
 	}
 
+	// Recently-played cooldown
+	var cooldown time.Duration
+	var cooldownPaths map[string]time.Time
+	cooldownMin := st.CooldownMin
+	if s := q.Get("cooldown_min"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
+			cooldownMin = v
+		}
+	}
+	if cooldownMin > 0 && s.Watcher != nil {
+		cooldown = time.Duration(cooldownMin) * time.Minute
+		cooldownPaths = s.Watcher.PlayedAt
+	}
+
 	criteria := recommendation.Criteria{
 		SourceBPM:        bpm,
 		SourceKey:        key,
@@ -200,13 +252,21 @@ func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) {
 		BPMMin:           bpmMin,
 		BPMMax:           bpmMax,
 		BPMRangePercent:  bpmPct,
+		BPMHalfDouble:    st.BPMHalfDouble,
 		MatchKey:         matchKey,
 		MatchGenre:       matchGenre,
-		EnergyStep:       energyStep,
+		EnergyMode:       energyMode,
+		EnergyRange:      energyRange,
+		GenreCount:       st.GenreCount,
+		GenreMode:        st.GenreMode,
+		KeyTiers:         st.KeyTiers,
+		KeyWeights:       st.KeyWeights,
 		YearMin:          yearMin,
 		YearMax:          yearMax,
 		YearSource:       yearSource,
 		ExcludeFilePaths: excludePaths,
+		CooldownPaths:    cooldownPaths,
+		Cooldown:         cooldown,
 		MaxResults:       maxResults,
 	}
 
@@ -222,6 +282,67 @@ func parseBool(s string, defaultVal bool) bool {
 		return defaultVal
 	}
 	return s == "1" || s == "true"
+}
+
+// handleSettings serves GET/POST /api/settings — read and persist user settings.
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		s.settingsMu.RLock()
+		st := s.Settings
+		s.settingsMu.RUnlock()
+		json.NewEncoder(w).Encode(st)
+	case http.MethodPost:
+		var incoming map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.settingsMu.Lock()
+		// Overlay: only keys present in the request are applied; absent keys
+		// (including false booleans) keep their current value.
+		base, _ := json.Marshal(s.Settings)
+		var mergedMap map[string]json.RawMessage
+		if err := json.Unmarshal(base, &mergedMap); err != nil {
+			s.settingsMu.Unlock()
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		for k, v := range incoming {
+			mergedMap[k] = v
+		}
+		mergedBytes, _ := json.Marshal(mergedMap)
+		var merged settings.Settings
+		if err := json.Unmarshal(mergedBytes, &merged); err != nil {
+			s.settingsMu.Unlock()
+			http.Error(w, "Invalid settings: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := merged.Save(); err != nil {
+			s.settingsMu.Unlock()
+			log.Printf("Settings save failed: %v", err)
+			http.Error(w, "Failed to save settings", http.StatusInternalServerError)
+			return
+		}
+		s.Settings = &merged
+		saved := *s.Settings
+		s.settingsMu.Unlock()
+		log.Printf("Settings saved to %s", settings.Path())
+		json.NewEncoder(w).Encode(&saved)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleSessionStats serves GET /api/session-stats — what has been played tonight.
+func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.Watcher == nil {
+		json.NewEncoder(w).Encode(database.SessionStats{})
+		return
+	}
+	json.NewEncoder(w).Encode(s.Watcher.Stats())
 }
 
 func (s *Server) handleReveal(w http.ResponseWriter, r *http.Request) {

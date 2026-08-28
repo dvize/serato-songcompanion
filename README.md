@@ -5,17 +5,25 @@ A floating always-on-top companion app for Serato DJ that watches what you're cu
 ## Features
 
 - **Floating pill UI** — collapses to a slim bar, expands on hover, stays above Serato at all times
-- **Harmonic key matching** via the Camelot wheel (same key, relative, adjacent ±1, energy boost +7, dominant +3)
-- **BPM filtering** — absolute min/max range
-- **Energy level filter** — Mixed In Key energy within ±1 step
-- **Genre match** filter
+- **Harmonic key matching** via the Camelot wheel (same key, relative, adjacent ±1, energy boost +7, dominant +3) — each tier can be toggled or reweighted in Settings
+- **BPM filtering** — absolute min/max range or percentage tolerance with optional half/double-time matching
+- **Energy levels** — match exact, within ±N, higher only, lower only, or ignore
+- **Genre matching** — match any or all of the first N genres of the current track
 - **Date Added / Song Year** range filter with per-track source toggle
 - **Hide played** — automatically excludes tracks already played this session
-- **Resizable window** — remembers your preferred size across sessions
+- **Replay cooldown** — hide tracks played within the last N minutes
+- **Session stats** — tracks played tonight and top genres, in the header
+- **Settings panel** (⚙) — every matching knob, auto-saved and persisted across launches
+- **Smart window sizing** — position and expanded size persist, expand clamps to screen edges, multi-monitor aware
+- **Expand hotkey** — global shortcut to toggle expand/collapse
+- **Idle dim** — collapsed pill fades when untouched, returns on hover
+- **Tray icon (macOS)** — click the menu bar icon to show/hide the companion
 - **Collapsible filters panel** — hide filters to maximise visible recommendations
 - **Copy to clipboard** — click any recommendation to copy artist – title
-- **Drag to deck** — drag recommendation cards directly onto Serato decks (Windows)
+- **Drag to deck** — drag recommendation cards directly onto Serato decks
+- **Keyboard shortcuts** — `R` refresh, `C` copy top pick, `F` toggle filters
 - **DPI / zoom slider** — scale the UI 50–150%
+- **Cross-platform** — macOS (DMG), Windows (portable exe), Linux (AppImage)
 
 ---
 
@@ -58,8 +66,9 @@ On first launch, dependencies are installed automatically (~120 MB, one-time). S
 2. The companion pill appears on your screen — hover over it to expand
 3. Recommendations update automatically as each new track loads
 4. **Click** any recommendation card to copy `Artist – Title` to clipboard
-5. **Drag** a recommendation card onto a Serato deck to load it (Windows only)
+5. **Drag** a recommendation card onto a Serato deck to load it
 6. Use **🔒 Lock** to freeze the current track (ignores new plays); click **↺ Sync** to re-sync
+7. Click **⚙** for settings — matching defaults, window sizing, hotkey, tray
 
 ---
 
@@ -67,14 +76,38 @@ On first launch, dependencies are installed automatically (~120 MB, one-time). S
 
 | Filter | Description |
 |---|---|
-| **Harmonic Key** | Camelot wheel compatibility — same, relative (A↔B), adjacent (±1), energy boost (+7), dominant (+3) |
-| **Same Genre** | Only show tracks whose genre matches the current track |
-| **Energy ±1** | Mixed In Key energy level within one step of the current track |
+| **Harmonic Key** | Camelot wheel compatibility — same, relative (A↔B), adjacent (±1), energy boost (+7), dominant (+3). Tiers toggleable in Settings |
+| **Same Genre** | Only show tracks sharing a genre with the current track |
+| **Energy** | Any / Exact / Match ±1..4 / Higher / Lower relative to the current track |
 | **Hide Played** | Exclude tracks already played this session |
 | **BPM Min / Max** | Hard lower and upper BPM limits |
 | **Max Results** | Cap the list at 10 / 25 / 50 / 100 / All |
 | **From Year / To Year** | Year range filter; clear both for no limit |
 | **Date Added / Song Year** | Whether the year filter applies to when you added the track to Serato, or the track's release year ID3 tag |
+
+## Settings Reference
+
+Settings live in the ⚙ panel and auto-save to:
+
+- **macOS:** `~/Library/Application Support/Serato Companion/settings.json`
+- **Windows:** `%APPDATA%\Serato Companion\settings.json`
+- **Linux:** `~/.config/Serato Companion/settings.json`
+
+Override the location with the `SERATO_SETTINGS_PATH` environment variable.
+
+| Section | Setting | Description |
+|---|---|---|
+| Matching | Default Energy | Energy mode applied to recommendations (filters panel can override per session) |
+| Matching | Genres to Match | Any-of vs all-of, and how many of the current track's first N genres must match |
+| Matching | BPM Tolerance % | Percentage window around the current BPM; Half/Double toggle allows half/double-time matches |
+| Matching | Key Tiers | Enable/disable each Camelot compatibility tier |
+| Matching | Max Results / Hide Played | Defaults for the filters panel |
+| Matching | Replay Cooldown | Hide tracks played within the last N minutes |
+| Window | Collapsed / Expanded Size | Pill and expanded window dimensions |
+| Window | Idle Dim | Fade the collapsed pill after N seconds to N% opacity |
+| Window | Expand Hotkey | Click the field and press the combo (must include Cmd/Ctrl/Alt, or be an F-key). Escape clears. Saved and active immediately |
+| Window | Tray Icon | Menu bar icon toggles the window (macOS) |
+| General | Session Stats | Show tracks-played summary in the header |
 
 ---
 
@@ -119,7 +152,7 @@ go build -o companion-mac-amd64 ./cmd/companion/
 
 ## Configuration
 
-`config.json` (all fields optional — leave empty strings to auto-detect):
+`config.json` (next to the binary; all fields optional — leave empty strings to auto-detect):
 
 ```json
 {
@@ -132,6 +165,8 @@ go build -o companion-mac-amd64 ./cmd/companion/
 |---|---|
 | `database_path` | Windows: `%USERPROFILE%\Music\_Serato_\database V2`  Mac: `~/Music/_Serato_/database V2` |
 | `master_sqlite` | Windows: `%LOCALAPPDATA%\Serato\Library\master.sqlite`  Mac: `~/Library/Application Support/Serato/Library/master.sqlite` |
+
+All other preferences live in the per-user `settings.json` (see Settings Reference) — no need to edit `config.json` for matching behavior.
 
 ---
 

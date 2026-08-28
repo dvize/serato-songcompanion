@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win",
-    "build:mac": "electron-builder --mac"
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
   },
   "devDependencies": {
     "electron": "^29.0.0",
@@ -46,6 +47,28 @@
         {
           "from": "../companion-mac-arm64",
           "to": "companion-mac-arm64"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "Audio",
+      "extraResources": [
+        {
+          "from": "../companion-linux-amd64",
+          "to": "companion-linux-amd64"
+        },
+        {
+          "from": "../companion-linux-arm64",
+          "to": "companion-linux-arm64"
         }
       ]
     },
