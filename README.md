@@ -31,7 +31,7 @@ A floating always-on-top companion app for Serato DJ that watches what you're cu
 
 ### Windows
 
-> **Requires:** [Node.js 18+](https://nodejs.org)
+> **Requires:** [Node.js 20 LTS+](https://nodejs.org) (18 is the minimum; official builds use 22)
 
 1. Download `serato-companion-windows.zip` from the [latest release](https://github.com/dvize/serato-companion/releases/latest)
 2. Unzip to any folder (e.g. `C:\Tools\serato-companion`)
@@ -43,7 +43,7 @@ On first launch, `start.bat` installs Electron automatically (~120 MB, one-time)
 
 ### macOS
 
-> **Requires:** [Node.js 18+](https://nodejs.org)
+> **Requires:** [Node.js 20 LTS+](https://nodejs.org) (18 is the minimum; official builds use 22)
 
 1. Download `serato-companion-mac.zip` from the [latest release](https://github.com/dvize/serato-companion/releases/latest)
 2. Unzip to any folder
@@ -116,7 +116,7 @@ Override the location with the `SERATO_SETTINGS_PATH` environment variable.
 ### Prerequisites
 
 - [Go 1.21+](https://golang.org/dl/)
-- [Node.js 18+](https://nodejs.org)
+- [Node.js 20 LTS+](https://nodejs.org) — official CI builds use Node 22; Electron only needs 18+ locally, but 20+ is recommended
 
 ### Windows
 
