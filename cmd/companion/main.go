@@ -4,26 +4,24 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"path/filepath"
 
 	"serato-songcompanion/pkg/database"
 	"serato-songcompanion/pkg/server"
 )
 
 type Config struct {
-	DatabasePath   string `json:"database_path"`
-	HistoryPath    string `json:"history_path"`
-	SessionsDir    string `json:"sessions_dir"`   // legacy, unused
-	MasterSQLite   string `json:"master_sqlite"`  // path to Serato master.sqlite; empty = auto-detect
+	DatabasePath  string `json:"database_path"` // empty = platform default (~/Music/_Serato_ etc.)
+	HistoryPath   string `json:"history_path"`  // legacy, unused
+	SessionsDir   string `json:"sessions_dir"`  // legacy, unused
+	MasterSQLite  string `json:"master_sqlite"` // path to Serato master.sqlite; empty = auto-detect
 }
 
 func loadConfig() Config {
-	// Default config
-	root, _ := os.Getwd()
+	// Default config: point at the user's real Serato library, never the
+	// process working directory (inside Electron that is Resources/, which
+	// has no database V2 file — cwd-based defaults silently load 0 tracks).
 	config := Config{
-		DatabasePath: filepath.Join(root, "database V2"),
-		HistoryPath:  filepath.Join(root, "history.database"),
-		SessionsDir:  filepath.Join(root, "Sessions"),
+		DatabasePath: database.DefaultDatabasePath(),
 	}
 
 	// Try to load from config.json
@@ -40,10 +38,7 @@ func loadConfig() Config {
 	}
 	// Empty strings in config.json must not clobber defaults
 	if config.DatabasePath == "" {
-		config.DatabasePath = filepath.Join(root, "database V2")
-	}
-	if config.HistoryPath == "" {
-		config.HistoryPath = filepath.Join(root, "history.database")
+		config.DatabasePath = database.DefaultDatabasePath()
 	}
 	return config
 }

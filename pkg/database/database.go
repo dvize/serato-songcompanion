@@ -61,6 +61,22 @@ func DefaultDatabasePath() string {
 		return filepath.Join(home, "Music", "_Serato_", "database V2")
 	case "darwin":
 		home, _ := os.UserHomeDir()
+		candidates := []string{
+			filepath.Join(home, "Music", "_Serato_", "database V2"),
+		}
+		// Serato also keeps a _Serato_ folder on the root of any external
+		// drive it has read music from. Scan /Volumes the way the Windows
+		// branch scans drive letters.
+		if matches, err := filepath.Glob("/Volumes/*/_Serato_/database V2"); err == nil {
+			candidates = append(candidates, matches...)
+		}
+		for _, c := range candidates {
+			info, err := os.Stat(c)
+			if err == nil && info.Size() > 1024 { // must be >1KB to be a real library
+				return c
+			}
+		}
+		// Fall back to Music location even if it doesn't exist yet
 		return filepath.Join(home, "Music", "_Serato_", "database V2")
 	default:
 		home, _ := os.UserHomeDir()
