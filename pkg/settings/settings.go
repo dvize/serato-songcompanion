@@ -167,6 +167,22 @@ func (s *Settings) clamp() {
 	if s.ExpandedHeight < 300 {
 		s.ExpandedHeight = 720
 	}
+	// Ceilings: absurd values make the settings gear unreachable (window
+	// bigger than the screen). Matches the max attributes in the settings UI;
+	// Electron additionally clamps to the actual display work area at apply
+	// time.
+	if s.CollapsedWidth > 800 {
+		s.CollapsedWidth = 340
+	}
+	if s.CollapsedHeight > 300 {
+		s.CollapsedHeight = 64
+	}
+	if s.ExpandedWidth > 2000 {
+		s.ExpandedWidth = 860
+	}
+	if s.ExpandedHeight > 1600 {
+		s.ExpandedHeight = 720
+	}
 	if s.DimOpacity < 5 {
 		s.DimOpacity = 5
 	}

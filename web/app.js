@@ -181,6 +181,18 @@ function init() {
     els.filterYearMin.value = state.filters.yearMin;
     els.filterYearMax.value = state.filters.yearMax;
 
+    // Right-click anywhere in the window opens a native menu with
+    // "Reset Window Size" — escape hatch when the window is oversized and
+    // the settings gear is unreachable.
+    if (isElectron && window.electronAPI.showContextMenu) {
+        document.addEventListener('contextmenu', (e) => {
+            // Don't hijack right-clicks on text inputs
+            if (e.target.closest('input, textarea, select')) return;
+            e.preventDefault();
+            window.electronAPI.showContextMenu();
+        });
+    }
+
     loadSettings();
     connectWebSocket();
     setupEventListeners();
@@ -671,7 +683,8 @@ function setupSettingsPanel() {
         dimOpacity: document.getElementById('setDimOpacity'),
         hotkey: document.getElementById('setHotkey'),
         trayMode: document.getElementById('setTrayMode'),
-        sessionStats: document.getElementById('setSessionStats')
+        sessionStats: document.getElementById('setSessionStats'),
+        resetWindow: document.getElementById('setResetWindow')
     };
 
     const tierBoxes = document.querySelectorAll('#setKeyTiers input[data-tier]');
@@ -832,12 +845,37 @@ function setupSettingsPanel() {
 
     Object.values(setEls).forEach(el => {
         if (el === setEls.energyMode) return;
+        if (el === setEls.resetWindow) return;
         el.addEventListener('change', scheduleSave);
         if (el.type === 'text' || el.type === 'number') {
             el.addEventListener('input', scheduleSave);
         }
     });
     tierBoxes.forEach(box => box.addEventListener('change', scheduleSave));
+
+    // Reset window size to defaults (also available via right-click / Dock menu)
+    setEls.resetWindow.addEventListener('click', async () => {
+        if (!isElectron || !window.electronAPI.resetWindowSize) {
+            els.settingsSaved.textContent = 'Electron only';
+            els.settingsSaved.style.color = '#fbbf24';
+            setTimeout(() => { els.settingsSaved.textContent = ''; els.settingsSaved.style.color = ''; }, 2500);
+            return;
+        }
+        try {
+            const st = await window.electronAPI.resetWindowSize();
+            if (st) {
+                state.settings = st;
+                fillPanel();
+                applySettingsToUI();
+            }
+            flashSaved();
+        } catch (err) {
+            console.error('Window reset failed:', err);
+            els.settingsSaved.textContent = 'Reset failed';
+            els.settingsSaved.style.color = '#f87171';
+            setTimeout(() => { els.settingsSaved.textContent = ''; els.settingsSaved.style.color = ''; }, 2500);
+        }
+    });
 }
 
 // Map a KeyboardEvent to an Electron accelerator key name, or null if unusable.

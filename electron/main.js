@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, nativeImage, globalShortcut, Tray, screen } = require('electron')
+const { app, BrowserWindow, ipcMain, nativeImage, globalShortcut, Tray, screen, Menu } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { spawn } = require('child_process')
@@ -55,13 +55,49 @@ function saveWindowState() {
 }
 
 // Clamp a rect into the work area of the display nearest to it, so the window
-// is never spawned partially off-screen (multi-monitor aware).
+// is never spawned partially off-screen and never larger than the screen
+// (multi-monitor aware). Clamps position AND size.
 function clampRect(x, y, width, height) {
     const display = screen.getDisplayNearestPoint({ x: x || 0, y: y || 0 })
     const wa = display.workArea
-    const nx = Math.min(Math.max(wa.x, x), wa.x + wa.width - width)
-    const ny = Math.min(Math.max(wa.y, y), wa.y + wa.height - height)
-    return { x: nx, y: ny, width, height }
+    const w = Math.min(width, wa.width)
+    const h = Math.min(height, wa.height)
+    const nx = Math.min(Math.max(wa.x, x), wa.x + wa.width - w)
+    const ny = Math.min(Math.max(wa.y, y), wa.y + wa.height - h)
+    return { x: nx, y: ny, width: w, height: h }
+}
+
+// ── Reset window size / position ──────────────────────────────────────────
+
+// Reset the expanded size (and persisted state) back to defaults. Reachable
+// from the window context menu, the Dock menu and the settings panel — used
+// when a bad size makes the window unusable and the settings gear unreachable.
+async function resetWindowSize() {
+    // Persist defaults to the backend settings file so they survive restarts
+    // (the backend re-applies expanded_* on every launch).
+    let saved = null
+    try {
+        const res = await fetch('http://localhost:8080/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ expanded_width: 860, expanded_height: 720 })
+        })
+        if (res.ok) saved = await res.json()
+    } catch (_) {}
+    if (saved && saved.expanded_width) {
+        expandedSize = { width: saved.expanded_width, height: saved.expanded_height }
+    } else {
+        expandedSize = { width: 860, height: 720 }
+    }
+    winState.expandedW = expandedSize.width
+    winState.expandedH = expandedSize.height
+    saveWindowState()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        const [x, y] = mainWindow.getPosition()
+        mainWindow.setResizable(true)
+        mainWindow.setBounds(clampRect(x, y, expandedSize.width, expandedSize.height), true)
+    }
+    return saved
 }
 
 // ── Paths ──────────────────────────────────────────────────────────────────
@@ -314,11 +350,35 @@ ipcMain.handle('apply-settings', (event, st) => {
     return applySettings(st)
 })
 
+// Context menu on the window (right-click) — includes a size reset escape
+// hatch for when a bad window size makes the settings gear unreachable.
+ipcMain.on('window-context-menu', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    const menu = Menu.buildFromTemplate([
+        { label: 'Reset Window Size', click: () => { resetWindowSize() } },
+        { type: 'separator' },
+        { label: 'Expand / Collapse', click: () => {
+            mainWindow.webContents.send('toggle-expand')
+        } }
+    ])
+    menu.popup({ window: mainWindow })
+})
+
+ipcMain.handle('reset-window-size', () => resetWindowSize())
+
 // ── App lifecycle ──────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
     startBackend()
     createWindow()
+
+    // Dock menu (macOS): also offers the size reset — works even when the
+    // window is too large to click anything.
+    if (process.platform === 'darwin') {
+        app.dock.setMenu(Menu.buildFromTemplate([
+            { label: 'Reset Window Size', click: () => { resetWindowSize() } }
+        ]))
+    }
 
     // On Windows all HWND_TOPMOST windows share one layer; whichever was
     // activated most recently sits on top.  Serato keeps bumping itself above
